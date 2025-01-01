@@ -1,0 +1,14 @@
+{
+  "name": "psd-converter",
+  "version": "1.0.0",
+  "description": "フォルダーをPSDに変換するツール",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "canvas": "^2.11.0",
+    "node-dir": "^0.1.17",
+    "psd": "^3.5.0"
+  }
+}
