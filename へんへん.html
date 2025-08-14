@@ -12,6 +12,9 @@
   .play { background-color: #4CAF50; color: white; }
   .stop { background-color: #f44336; color: white; }
   .serial { background-color: #2196F3; color: white; }
+  #status { text-align: center; margin: 10px; font-size: 1.2em; font-weight: bold; color: #333; }
+  #countdown { text-align: center; margin: 10px; font-size: 1.1em; color: #555; }
+  .checkbox-label { display:block; text-align:center; margin:10px; font-size:1.1em; }
 </style>
 </head>
 <body>
@@ -23,17 +26,28 @@
 <label>戸締め放送選択</label>
 <input type="file" id="closingFile" accept="audio/*" class="file-input">
 
+<label class="checkbox-label">
+  <input type="checkbox" id="closingEnabled" checked> 戸締め放送を再生する
+</label>
+
 <button id="playBtn" class="button play">再生</button>
 <button id="stopBtn" class="button stop">停止</button>
 <button id="serialBtn" class="button serial">シリアル接続</button>
+
+<div id="status">ステータス: 停止中</div>
+<div id="countdown"></div>
 
 <script>
 let bellAudio = new Audio();
 let closingAudio = new Audio();
 let serialPort = null;
 let reader = null;
+const statusDiv = document.getElementById('status');
+const countdownDiv = document.getElementById('countdown');
+const closingCheckbox = document.getElementById('closingEnabled');
 
-// 音声ファイル選択
+let countdownTimer = null;
+
 document.getElementById('bellFile').addEventListener('change', e => {
     const file = e.target.files[0];
     if(file) bellAudio.src = URL.createObjectURL(file);
@@ -43,15 +57,36 @@ document.getElementById('closingFile').addEventListener('change', e => {
     if(file) closingAudio.src = URL.createObjectURL(file);
 });
 
+function startCountdown(audio, label) {
+    clearInterval(countdownTimer);
+    countdownTimer = setInterval(() => {
+        let remaining = Math.max(0, Math.ceil(audio.duration - audio.currentTime));
+        countdownDiv.textContent = `${label} 残り: ${remaining}s`;
+        if(audio.paused) clearInterval(countdownTimer);
+    }, 200);
+}
+
 // 再生
 async function playSequence() {
-    if(!bellAudio.src || !closingAudio.src) {
-        alert('音声ファイルを両方選択してください');
+    if(!bellAudio.src) {
+        alert('発車ベルファイルを選択してください');
         return;
     }
     try {
+        statusDiv.textContent = 'ステータス: 発車ベル再生中';
         await bellAudio.play();
-        bellAudio.onended = async () => { await closingAudio.play(); };
+        startCountdown(bellAudio, '発車ベル');
+        bellAudio.onended = async () => {
+            if(closingCheckbox.checked && closingAudio.src) {
+                statusDiv.textContent = 'ステータス: 戸締め放送再生中';
+                await closingAudio.play();
+                startCountdown(closingAudio, '戸締め放送');
+                closingAudio.onended = () => { statusDiv.textContent = 'ステータス: 停止中'; countdownDiv.textContent=''; };
+            } else {
+                statusDiv.textContent = 'ステータス: 停止中';
+                countdownDiv.textContent='';
+            }
+        };
     } catch(e) { console.error(e); }
 }
 
@@ -59,7 +94,16 @@ async function playSequence() {
 async function stopSequence() {
     bellAudio.pause();
     bellAudio.currentTime = 0;
-    await closingAudio.play();
+    clearInterval(countdownTimer);
+    if(closingCheckbox.checked && closingAudio.src) {
+        statusDiv.textContent = 'ステータス: 戸締め放送再生中';
+        await closingAudio.play();
+        startCountdown(closingAudio, '戸締め放送');
+        closingAudio.onended = () => { statusDiv.textContent = 'ステータス: 停止中'; countdownDiv.textContent=''; };
+    } else {
+        statusDiv.textContent = 'ステータス: 停止中';
+        countdownDiv.textContent='';
+    }
 }
 
 document.getElementById('playBtn').addEventListener('click', playSequence);
@@ -81,17 +125,17 @@ async function readSerialLoop() {
         while(true) {
             const { value, done } = await reader.read();
             if(done) break;
-            if(value && value[0] === 1) { // シンプルなトリガー
+            if(value && value[0] === 1) { 
                 playSequence();
             }
         }
     } catch(e){ console.error(e); }
 }
 
-// PWA対応（Service WorkerをJS内に埋め込む）
+// PWA対応（Service WorkerをHTML内に埋め込む）
 if('serviceWorker' in navigator){
     const swBlob = new Blob([`
-        const cacheName = 'bell-app-v1';
+        const cacheName = 'bell-app-v2';
         const filesToCache = ['./'];
         self.addEventListener('install', e => {
           e.waitUntil(caches.open(cacheName).then(cache => cache.addAll(filesToCache)));
@@ -104,7 +148,7 @@ if('serviceWorker' in navigator){
     navigator.serviceWorker.register(swUrl).catch(console.error);
 }
 
-// ホーム画面追加を促すPWAイベント
+// ホーム画面追加
 let deferredPrompt;
 window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
@@ -121,6 +165,5 @@ window.addEventListener('beforeinstallprompt', (e) => {
     document.body.appendChild(installBtn);
 });
 </script>
-
 </body>
 </html>
