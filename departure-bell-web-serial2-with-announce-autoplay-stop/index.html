@@ -1,59 +1,151 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>どこでも発車ベル（Web + Serial）</title>
-<link rel="manifest" href="manifest.webmanifest">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>発車ベル & 戸締め放送プレイヤー</title>
 <style>
-  body{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", sans-serif; background:#081021; color:#e6eef8; margin:0; padding:18px;}
-  .card{max-width:900px;margin:0 auto;background:linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)); padding:18px;border-radius:12px;}
-  h1{margin:0 0 6px;font-size:20px}
-  p.sub{margin:0 0 12px;color:#9fb1c9}
-  .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
-  button,input,select{padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:#0f1724;color:inherit}
-  button.primary{background:linear-gradient(180deg,#38bdf8,#0284c7);color:#002028;border:none}
-  .file-info{color:#bcd3e6;font-size:13px}
-  #log{height:120px;overflow:auto;background:#07111a;padding:8px;border-radius:6px;border:1px solid rgba(255,255,255,0.03);font-size:13px}
-  label{display:inline-flex;align-items:center;gap:6px}
-  footer{margin-top:12px;color:#86a5c2;font-size:13px}
+body { font-family: sans-serif; padding: 20px; background: #f5f5f5; }
+h1 { text-align: center; }
+.button { display: block; width: 90%; margin: 10px auto; padding: 15px; font-size: 1.2em; border: none; border-radius: 8px; cursor: pointer; }
+.file-input { display: block; margin: 10px auto; }
+.play { background-color: #4CAF50; color: white; }
+.stop { background-color: #f44336; color: white; }
+.serial { background-color: #2196F3; color: white; }
+#status { text-align: center; margin: 10px; font-size: 1.2em; font-weight: bold; color: #333; }
+#countdown { text-align: center; margin: 10px; font-size: 1.1em; color: #555; }
+.checkbox-label { display:block; text-align:center; margin:10px; font-size:1.1em; }
 </style>
 </head>
 <body>
-<div class="card">
-  <h1>どこでも発車ベル（Web + Serial）</h1>
-  <p class="sub">ローカル音源を選択して再生。USBシリアル（Web Serial API）で「1/0」を受け取ると再生/停止します。</p>
+<h1>発車ベル & 戸締め放送プレイヤー</h1>
 
-  <div class="row">
-    <input id="fileInput" type="file" accept="audio/*">
-<br><label>戸締め放送ファイル選択:</label>
-<input type="file" id="announceInput" accept="audio/*">
-    <div class="file-info" id="fileStatus">未選択</div>
-  </div>
+<label>発車ベル選択</label>
+<input type="file" id="bellFile" accept="audio/*" class="file-input">
 
-  <div class="row">
-    <button id="playBtn" class="primary">▶ 再生</button>
-    <button id="pauseBtn">⏸ 一時停止</button>
-    <button id="stopBtn">⏹ 停止</button>
-    <label><input id="loopChk" type="checkbox"> ループ</label>
-    <label>音量 <input id="volume" type="range" min="0" max="1" step="0.01" value="1"></label>
-  </div>
+<label>戸締め放送選択</label>
+<input type="file" id="closingFile" accept="audio/*" class="file-input">
 
-  <div style="height:1px;background:rgba(255,255,255,0.03);margin:12px 0"></div>
+<label class="checkbox-label">
+  <input type="checkbox" id="closingEnabled" checked> 戸締め放送を再生する
+</label>
 
-  <h3>USBシリアル（オプション）</h3>
-  <div class="row">
-    <select id="baudRate"><option value="9600">9600</option><option value="19200">19200</option><option value="38400">38400</option><option value="115200">115200</option></select>
-    <button id="serialBtn">シリアル接続</button>
-    <div class="file-info" id="serialStatus">未接続（Web Serial対応のブラウザで使用）</div>
-  </div>
-  <div class="row">
-    <div id="log"></div>
-  </div>
+<button id="playBtn" class="button play">再生</button>
+<button id="stopBtn" class="button stop">停止</button>
+<button id="serialBtn" class="button serial">シリアル接続</button>
 
-  <footer>注意: Web SerialはHTTPSまたはlocalhost上で動作します。対応ブラウザ（Android版Chrome等）でご利用ください。</footer>
-</div>
+<div id="status">ステータス: 停止中</div>
+<div id="countdown"></div>
 
-<script src="main.js"></script>
+<script>
+let bellAudio = new Audio();
+let closingAudio = new Audio();
+let serialPort = null;
+let reader = null;
+const statusDiv = document.getElementById('status');
+const countdownDiv = document.getElementById('countdown');
+const closingCheckbox = document.getElementById('closingEnabled');
+let countdownTimer = null;
+
+document.getElementById('bellFile').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if(file) bellAudio.src = URL.createObjectURL(file);
+});
+document.getElementById('closingFile').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if(file) closingAudio.src = URL.createObjectURL(file);
+});
+
+function startCountdown(audio, label) {
+    clearInterval(countdownTimer);
+    countdownTimer = setInterval(() => {
+        let remaining = Math.max(0, Math.ceil(audio.duration - audio.currentTime));
+        countdownDiv.textContent = `${label} 残り: ${remaining}s`;
+        if(audio.paused) clearInterval(countdownTimer);
+    }, 200);
+}
+
+async function playSequence() {
+    if(!bellAudio.src) { alert('発車ベルファイルを選択してください'); return; }
+    try {
+        statusDiv.textContent = 'ステータス: 発車ベル再生中';
+        await bellAudio.play();
+        startCountdown(bellAudio, '発車ベル');
+        bellAudio.onended = async () => {
+            if(closingCheckbox.checked && closingAudio.src) {
+                statusDiv.textContent = 'ステータス: 戸締め放送再生中';
+                await closingAudio.play();
+                startCountdown(closingAudio, '戸締め放送');
+                closingAudio.onended = () => { statusDiv.textContent = 'ステータス: 停止中'; countdownDiv.textContent=''; };
+            } else {
+                statusDiv.textContent = 'ステータス: 停止中';
+                countdownDiv.textContent='';
+            }
+        };
+    } catch(e) { console.error(e); }
+}
+
+async function stopSequence() {
+    bellAudio.pause(); bellAudio.currentTime = 0; clearInterval(countdownTimer);
+    if(closingCheckbox.checked && closingAudio.src) {
+        statusDiv.textContent = 'ステータス: 戸締め放送再生中';
+        await closingAudio.play();
+        startCountdown(closingAudio, '戸締め放送');
+        closingAudio.onended = () => { statusDiv.textContent = 'ステータス: 停止中'; countdownDiv.textContent=''; };
+    } else { statusDiv.textContent = 'ステータス: 停止中'; countdownDiv.textContent=''; }
+}
+
+document.getElementById('playBtn').addEventListener('click', playSequence);
+document.getElementById('stopBtn').addEventListener('click', stopSequence);
+
+// ---------------------------
+// シリアル接続
+document.getElementById('serialBtn').addEventListener('click', async () => {
+    try {
+        serialPort = await navigator.serial.requestPort();
+        await serialPort.open({ baudRate: 9600 });
+        reader = serialPort.readable.getReader();
+        readSerialLoop();
+        alert('シリアル接続完了');
+    } catch(e) { console.error(e); alert('接続に失敗しました'); }
+});
+
+async function readSerialLoop() {
+    try {
+        while(true) {
+            const { value, done } = await reader.read();
+            if(done) break;
+            if(value && value.length > 0) {
+                if(value[0] === 0) playSequence(); // TTL LOW信号対応
+            }
+        }
+    } catch(e){ console.error(e); }
+}
+
+// ---------------------------
+// PWA Service Worker 登録
+if('serviceWorker' in navigator){
+    navigator.serviceWorker.register('service-worker.js')
+    .then(reg => console.log('Service Worker 登録成功:', reg))
+    .catch(err => console.error('Service Worker 登録失敗:', err));
+}
+
+// ホーム画面追加
+let deferredPrompt;
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    const installBtn = document.createElement('button');
+    installBtn.textContent = 'ホーム画面に追加';
+    installBtn.className = 'button serial';
+    installBtn.onclick = async () => {
+        deferredPrompt.prompt();
+        const choiceResult = await deferredPrompt.userChoice;
+        console.log(choiceResult.outcome);
+        deferredPrompt = null;
+    };
+    document.body.appendChild(installBtn);
+});
+</script>
 </body>
 </html>
