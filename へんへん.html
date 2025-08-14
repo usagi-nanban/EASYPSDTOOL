@@ -3,22 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>発車ベル & 戸締め放送プレイヤー</title>
+<title>発車ベル & 戸締め放送プレイヤー (オフライン対応)</title>
 <style>
-  body { font-family: sans-serif; padding: 20px; background: #f5f5f5; }
-  h1 { text-align: center; }
-  .button { display: block; width: 90%; margin: 10px auto; padding: 15px; font-size: 1.2em; border: none; border-radius: 8px; cursor: pointer; }
-  .file-input { display: block; margin: 10px auto; }
-  .play { background-color: #4CAF50; color: white; }
-  .stop { background-color: #f44336; color: white; }
-  .serial { background-color: #2196F3; color: white; }
-  #status { text-align: center; margin: 10px; font-size: 1.2em; font-weight: bold; color: #333; }
-  #countdown { text-align: center; margin: 10px; font-size: 1.1em; color: #555; }
-  .checkbox-label { display:block; text-align:center; margin:10px; font-size:1.1em; }
+body { font-family: sans-serif; padding: 20px; background: #f5f5f5; }
+h1 { text-align: center; }
+.button { display: block; width: 90%; margin: 10px auto; padding: 15px; font-size: 1.2em; border: none; border-radius: 8px; cursor: pointer; }
+.file-input { display: block; margin: 10px auto; }
+.play { background-color: #4CAF50; color: white; }
+.stop { background-color: #f44336; color: white; }
+.serial { background-color: #2196F3; color: white; }
+#status { text-align: center; margin: 10px; font-size: 1.2em; font-weight: bold; color: #333; }
+#countdown { text-align: center; margin: 10px; font-size: 1.1em; color: #555; }
+.checkbox-label { display:block; text-align:center; margin:10px; font-size:1.1em; }
 </style>
 </head>
 <body>
-<h1>発車ベル & 戸締め放送プレイヤー</h1>
+<h1>発車ベル & 戸締め放送プレイヤー (オフライン対応)</h1>
 
 <label>発車ベル選択</label>
 <input type="file" id="bellFile" accept="audio/*" class="file-input">
@@ -45,18 +45,65 @@ let reader = null;
 const statusDiv = document.getElementById('status');
 const countdownDiv = document.getElementById('countdown');
 const closingCheckbox = document.getElementById('closingEnabled');
-
 let countdownTimer = null;
 
-document.getElementById('bellFile').addEventListener('change', e => {
+// IndexedDB 用
+let db;
+const dbRequest = indexedDB.open('bellDB', 1);
+dbRequest.onupgradeneeded = e => {
+    db = e.target.result;
+    db.createObjectStore('files', { keyPath: 'name' });
+};
+dbRequest.onsuccess = e => { db = e.target.result; };
+dbRequest.onerror = e => { console.error('DBエラー', e); };
+
+async function saveFileToDB(name, file) {
+    return new Promise(resolve => {
+        const tx = db.transaction('files', 'readwrite');
+        const store = tx.objectStore('files');
+        store.put({name, file});
+        tx.oncomplete = () => resolve();
+    });
+}
+
+async function loadFileFromDB(name) {
+    return new Promise(resolve => {
+        const tx = db.transaction('files', 'readonly');
+        const store = tx.objectStore('files');
+        const req = store.get(name);
+        req.onsuccess = () => resolve(req.result ? req.result.file : null);
+    });
+}
+
+// ファイル選択イベント
+document.getElementById('bellFile').addEventListener('change', async e => {
     const file = e.target.files[0];
-    if(file) bellAudio.src = URL.createObjectURL(file);
+    if(file) {
+        bellAudio.src = URL.createObjectURL(file);
+        await saveFileToDB('bell', file);
+    }
 });
-document.getElementById('closingFile').addEventListener('change', e => {
+document.getElementById('closingFile').addEventListener('change', async e => {
     const file = e.target.files[0];
-    if(file) closingAudio.src = URL.createObjectURL(file);
+    if(file) {
+        closingAudio.src = URL.createObjectURL(file);
+        await saveFileToDB('closing', file);
+    }
 });
 
+// オフライン用ロード
+async function loadAudioFiles() {
+    if(!bellAudio.src) {
+        const bellFile = await loadFileFromDB('bell');
+        if(bellFile) bellAudio.src = URL.createObjectURL(bellFile);
+    }
+    if(!closingAudio.src) {
+        const closingFile = await loadFileFromDB('closing');
+        if(closingFile) closingAudio.src = URL.createObjectURL(closingFile);
+    }
+}
+
+// カウントダウン
 function startCountdown(audio, label) {
     clearInterval(countdownTimer);
     countdownTimer = setInterval(() => {
@@ -66,49 +113,54 @@ function startCountdown(audio, label) {
     }, 200);
 }
 
-async function playSequence() {
-    if(!bellAudio.src) {
-        alert('発車ベルファイルを選択してください');
-        return;
-    }
-    try {
-        statusDiv.textContent = 'ステータス: 発車ベル再生中';
-        await bellAudio.play();
-        startCountdown(bellAudio, '発車ベル');
-        bellAudio.onended = async () => {
-            if(closingCheckbox.checked && closingAudio.src) {
-                statusDiv.textContent = 'ステータス: 戸締め放送再生中';
-                await closingAudio.play();
-                startCountdown(closingAudio, '戸締め放送');
-                closingAudio.onended = () => { statusDiv.textContent = 'ステータス: 停止中'; countdownDiv.textContent=''; };
-            } else {
-                statusDiv.textContent = 'ステータス: 停止中';
-                countdownDiv.textContent='';
-            }
-        };
-    } catch(e) { console.error(e); }
+// 発車ベル再生
+async function playBell() {
+    await loadAudioFiles();
+    if(!bellAudio.src) return;
+    bellAudio.currentTime = 0;
+    statusDiv.textContent = 'ステータス: 発車ベル再生中';
+    await bellAudio.play();
+    startCountdown(bellAudio, '発車ベル');
 }
 
-async function stopSequence() {
-    bellAudio.pause();
-    bellAudio.currentTime = 0;
-    clearInterval(countdownTimer);
+// 戸締め放送再生
+async function playClosing() {
+    await loadAudioFiles();
     if(closingCheckbox.checked && closingAudio.src) {
+        closingAudio.pause();
+        closingAudio.currentTime = 0;
         statusDiv.textContent = 'ステータス: 戸締め放送再生中';
         await closingAudio.play();
         startCountdown(closingAudio, '戸締め放送');
-        closingAudio.onended = () => { statusDiv.textContent = 'ステータス: 停止中'; countdownDiv.textContent=''; };
+        closingAudio.onended = () => {
+            statusDiv.textContent = 'ステータス: 停止中';
+            countdownDiv.textContent='';
+        };
     } else {
         statusDiv.textContent = 'ステータス: 停止中';
         countdownDiv.textContent='';
     }
 }
 
+// 再生
+async function playSequence() {
+    await playBell();
+    bellAudio.onended = playClosing;
+}
+
+// 停止（打ち返し）
+async function stopSequence() {
+    bellAudio.pause();
+    bellAudio.currentTime = 0;
+    clearInterval(countdownTimer);
+    await playClosing();
+}
+
 document.getElementById('playBtn').addEventListener('click', playSequence);
 document.getElementById('stopBtn').addEventListener('click', stopSequence);
 
 // ---------------------------
-// シリアル接続（BSW215B3 + CH340対応）
+// シリアル接続
 document.getElementById('serialBtn').addEventListener('click', async () => {
     try {
         serialPort = await navigator.serial.requestPort();
@@ -125,8 +177,7 @@ async function readSerialLoop() {
             const { value, done } = await reader.read();
             if(done) break;
             if(value && value.length > 0) {
-                // プルアップ抵抗使用でスイッチ押下時は LOW (0) 信号
-                if(value[0] === 0) {
+                if(value[0] === 0) { // TTL LOWで発車ベル→戸締め
                     playSequence();
                 }
             }
@@ -135,16 +186,16 @@ async function readSerialLoop() {
 }
 
 // ---------------------------
-// PWA対応
+// PWA Service Worker
 if('serviceWorker' in navigator){
     const swBlob = new Blob([`
-        const cacheName = 'bell-app-v2';
+        const cacheName = 'bell-app-v3';
         const filesToCache = ['./'];
         self.addEventListener('install', e => {
-          e.waitUntil(caches.open(cacheName).then(cache => cache.addAll(filesToCache)));
+            e.waitUntil(caches.open(cacheName).then(cache => cache.addAll(filesToCache)));
         });
         self.addEventListener('fetch', e => {
-          e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+            e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
         });
     `], {type: 'application/javascript'});
     const swUrl = URL.createObjectURL(swBlob);
