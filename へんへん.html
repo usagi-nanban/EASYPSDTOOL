@@ -66,7 +66,6 @@ function startCountdown(audio, label) {
     }, 200);
 }
 
-// 再生
 async function playSequence() {
     if(!bellAudio.src) {
         alert('発車ベルファイルを選択してください');
@@ -90,7 +89,6 @@ async function playSequence() {
     } catch(e) { console.error(e); }
 }
 
-// 停止
 async function stopSequence() {
     bellAudio.pause();
     bellAudio.currentTime = 0;
@@ -109,7 +107,8 @@ async function stopSequence() {
 document.getElementById('playBtn').addEventListener('click', playSequence);
 document.getElementById('stopBtn').addEventListener('click', stopSequence);
 
-// シリアル接続
+// ---------------------------
+// シリアル接続（BSW215B3 + CH340対応）
 document.getElementById('serialBtn').addEventListener('click', async () => {
     try {
         serialPort = await navigator.serial.requestPort();
@@ -125,14 +124,18 @@ async function readSerialLoop() {
         while(true) {
             const { value, done } = await reader.read();
             if(done) break;
-            if(value && value[0] === 1) { 
-                playSequence();
+            if(value && value.length > 0) {
+                // プルアップ抵抗使用でスイッチ押下時は LOW (0) 信号
+                if(value[0] === 0) {
+                    playSequence();
+                }
             }
         }
     } catch(e){ console.error(e); }
 }
 
-// PWA対応（Service WorkerをHTML内に埋め込む）
+// ---------------------------
+// PWA対応
 if('serviceWorker' in navigator){
     const swBlob = new Blob([`
         const cacheName = 'bell-app-v2';
