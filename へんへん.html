@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>発車ベル & 戸締め放送プレイヤー</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; background: #f5f5f5; }
+  h1 { text-align: center; }
+  .button { display: block; width: 90%; margin: 10px auto; padding: 15px; font-size: 1.2em; border: none; border-radius: 8px; cursor: pointer; }
+  .file-input { display: block; margin: 10px auto; }
+  .play { background-color: #4CAF50; color: white; }
+  .stop { background-color: #f44336; color: white; }
+  .serial { background-color: #2196F3; color: white; }
+</style>
+</head>
+<body>
+<h1>発車ベル & 戸締め放送プレイヤー</h1>
+
+<label>発車ベル選択</label>
+<input type="file" id="bellFile" accept="audio/*" class="file-input">
+
+<label>戸締め放送選択</label>
+<input type="file" id="closingFile" accept="audio/*" class="file-input">
+
+<button id="playBtn" class="button play">再生</button>
+<button id="stopBtn" class="button stop">停止</button>
+<button id="serialBtn" class="button serial">シリアル接続</button>
+
+<script>
+let bellAudio = new Audio();
+let closingAudio = new Audio();
+let serialPort = null;
+let reader = null;
+
+// 音声ファイル選択
+document.getElementById('bellFile').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if(file) bellAudio.src = URL.createObjectURL(file);
+});
+document.getElementById('closingFile').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if(file) closingAudio.src = URL.createObjectURL(file);
+});
+
+// 再生
+async function playSequence() {
+    if(!bellAudio.src || !closingAudio.src) {
+        alert('音声ファイルを両方選択してください');
+        return;
+    }
+    try {
+        await bellAudio.play();
+        bellAudio.onended = async () => { await closingAudio.play(); };
+    } catch(e) { console.error(e); }
+}
+
+// 停止
+async function stopSequence() {
+    bellAudio.pause();
+    bellAudio.currentTime = 0;
+    await closingAudio.play();
+}
+
+document.getElementById('playBtn').addEventListener('click', playSequence);
+document.getElementById('stopBtn').addEventListener('click', stopSequence);
+
+// シリアル接続
+document.getElementById('serialBtn').addEventListener('click', async () => {
+    try {
+        serialPort = await navigator.serial.requestPort();
+        await serialPort.open({ baudRate: 9600 });
+        reader = serialPort.readable.getReader();
+        readSerialLoop();
+        alert('シリアル接続完了');
+    } catch(e) { console.error(e); alert('接続に失敗しました'); }
+});
+
+async function readSerialLoop() {
+    try {
+        while(true) {
+            const { value, done } = await reader.read();
+            if(done) break;
+            if(value && value[0] === 1) { // シンプルなトリガー
+                playSequence();
+            }
+        }
+    } catch(e){ console.error(e); }
+}
+
+// PWA対応（Service WorkerをJS内に埋め込む）
+if('serviceWorker' in navigator){
+    const swBlob = new Blob([`
+        const cacheName = 'bell-app-v1';
+        const filesToCache = ['./'];
+        self.addEventListener('install', e => {
+          e.waitUntil(caches.open(cacheName).then(cache => cache.addAll(filesToCache)));
+        });
+        self.addEventListener('fetch', e => {
+          e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+        });
+    `], {type: 'application/javascript'});
+    const swUrl = URL.createObjectURL(swBlob);
+    navigator.serviceWorker.register(swUrl).catch(console.error);
+}
+
+// ホーム画面追加を促すPWAイベント
+let deferredPrompt;
+window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    const installBtn = document.createElement('button');
+    installBtn.textContent = 'ホーム画面に追加';
+    installBtn.className = 'button serial';
+    installBtn.onclick = async () => {
+        deferredPrompt.prompt();
+        const choiceResult = await deferredPrompt.userChoice;
+        console.log(choiceResult.outcome);
+        deferredPrompt = null;
+    };
+    document.body.appendChild(installBtn);
+});
+</script>
+
+</body>
+</html>
