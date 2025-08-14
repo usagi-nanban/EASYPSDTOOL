@@ -37,7 +37,6 @@ h1 { text-align: center; }
 <div id="status">ステータス: 停止中</div>
 <div id="countdown"></div>
 
-<!-- 既存のHTMLはそのまま -->
 <script>
 let bellAudio = new Audio();
 let closingAudio = new Audio();
@@ -69,6 +68,7 @@ function startCountdown(audio, label) {
 // 発車ベル再生
 async function playBell() {
     if(!bellAudio.src) return;
+    bellAudio.currentTime = 0; // 先頭から再生
     statusDiv.textContent = 'ステータス: 発車ベル再生中';
     await bellAudio.play();
     startCountdown(bellAudio, '発車ベル');
@@ -77,6 +77,8 @@ async function playBell() {
 // 戸締め放送再生
 async function playClosing() {
     if(closingCheckbox.checked && closingAudio.src) {
+        closingAudio.pause();
+        closingAudio.currentTime = 0; // 先頭から再生
         statusDiv.textContent = 'ステータス: 戸締め放送再生中';
         await closingAudio.play();
         startCountdown(closingAudio, '戸締め放送');
@@ -90,28 +92,26 @@ async function playClosing() {
     }
 }
 
-// 再生シーケンス
+// 再生シーケンス（ベル→戸締め）
 async function playSequence() {
     if(!bellAudio.src) { alert('発車ベルファイルを選択してください'); return; }
     await playBell();
     bellAudio.onended = playClosing;
 }
 
-// 停止（打ち返し対応）
+// 停止ボタン（打ち返し）
 async function stopSequence() {
-    // 発車ベル停止
     bellAudio.pause();
     bellAudio.currentTime = 0;
     clearInterval(countdownTimer);
-    // 戸締め放送だけ再生
-    await playClosing();
+    await playClosing(); // 戸締め放送だけ先頭から再生
 }
 
 document.getElementById('playBtn').addEventListener('click', playSequence);
 document.getElementById('stopBtn').addEventListener('click', stopSequence);
 
 // ---------------------------
-// シリアル接続
+// シリアル接続（TTL LOWで再生）
 document.getElementById('serialBtn').addEventListener('click', async () => {
     try {
         serialPort = await navigator.serial.requestPort();
@@ -128,13 +128,14 @@ async function readSerialLoop() {
             const { value, done } = await reader.read();
             if(done) break;
             if(value && value.length > 0) {
-                if(value[0] === 0) { // TTL LOWでトリガー
+                if(value[0] === 0) { // TTL LOWで発車ベル→戸締め
                     playSequence();
                 }
             }
         }
     } catch(e){ console.error(e); }
 }
+
 // ---------------------------
 // PWA Service Worker 登録
 if('serviceWorker' in navigator){
