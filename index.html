@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>どこでも発車ベル</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#ffffff">
+</head>
+<body>
+<h1>どこでも発車ベル</h1>
+<input type="file" id="fileInput" accept="audio/*">
+<p id="fileName">ファイル未選択</p>
+<button id="playBtn">再生</button>
+<button id="stopBtn">停止</button>
+<br><br>
+<label>ループ再生 <input type="checkbox" id="loopToggle"></label>
+<br>
+<label>音量 <input type="range" id="volume" min="0" max="1" step="0.01" value="1"></label>
+<p id="log"></p>
+
+<script src="main.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('service-worker.js').then(() => {
+    console.log('Service Worker registered');
+  });
+}
+</script>
+</body>
+</html>
