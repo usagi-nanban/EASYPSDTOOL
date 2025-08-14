@@ -187,17 +187,47 @@ async function readSerialLoop() {
 
 // ---------------------------
 // PWA Service Worker
-if('serviceWorker' in navigator){
+if ('serviceWorker' in navigator) {
     const swBlob = new Blob([`
-        const cacheName = 'bell-app-v3';
-        const filesToCache = ['./'];
-        self.addEventListener('install', e => {
-            e.waitUntil(caches.open(cacheName).then(cache => cache.addAll(filesToCache)));
+        const cacheName = 'bell-app-v4';
+        const filesToCache = [
+            './',             // HTML本体
+            './index.html',   // 明示的にHTML名でも
+        ];
+
+        self.addEventListener('install', event => {
+            event.waitUntil(
+                caches.open(cacheName).then(cache => {
+                    return cache.addAll(filesToCache);
+                })
+            );
         });
-        self.addEventListener('fetch', e => {
-            e.respondWith(caches.match(e.request).then(r => r || fetch(e.request)));
+
+        self.addEventListener('fetch', event => {
+            event.respondWith(
+                caches.match(event.request).then(response => {
+                    return response || fetch(event.request);
+                }).catch(() => {
+                    // オフラインで見つからなかった場合は index.html を返す
+                    if (event.request.mode === 'navigate') {
+                        return caches.match('./index.html');
+                    }
+                })
+            );
         });
-    `], {type: 'application/javascript'});
+
+        // 古いキャッシュを削除
+        self.addEventListener('activate', event => {
+            event.waitUntil(
+                caches.keys().then(keyList =>
+                    Promise.all(keyList.map(key => {
+                        if (key !== cacheName) return caches.delete(key);
+                    }))
+                )
+            );
+        });
+    `], { type: 'application/javascript' });
+
     const swUrl = URL.createObjectURL(swBlob);
     navigator.serviceWorker.register(swUrl).catch(console.error);
 }
