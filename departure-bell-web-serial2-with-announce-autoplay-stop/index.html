@@ -37,6 +37,7 @@ h1 { text-align: center; }
 <div id="status">ステータス: 停止中</div>
 <div id="countdown"></div>
 
+<!-- 既存のHTMLはそのまま -->
 <script>
 let bellAudio = new Audio();
 let closingAudio = new Audio();
@@ -65,34 +66,45 @@ function startCountdown(audio, label) {
     }, 200);
 }
 
-async function playSequence() {
-    if(!bellAudio.src) { alert('発車ベルファイルを選択してください'); return; }
-    try {
-        statusDiv.textContent = 'ステータス: 発車ベル再生中';
-        await bellAudio.play();
-        startCountdown(bellAudio, '発車ベル');
-        bellAudio.onended = async () => {
-            if(closingCheckbox.checked && closingAudio.src) {
-                statusDiv.textContent = 'ステータス: 戸締め放送再生中';
-                await closingAudio.play();
-                startCountdown(closingAudio, '戸締め放送');
-                closingAudio.onended = () => { statusDiv.textContent = 'ステータス: 停止中'; countdownDiv.textContent=''; };
-            } else {
-                statusDiv.textContent = 'ステータス: 停止中';
-                countdownDiv.textContent='';
-            }
-        };
-    } catch(e) { console.error(e); }
+// 発車ベル再生
+async function playBell() {
+    if(!bellAudio.src) return;
+    statusDiv.textContent = 'ステータス: 発車ベル再生中';
+    await bellAudio.play();
+    startCountdown(bellAudio, '発車ベル');
 }
 
-async function stopSequence() {
-    bellAudio.pause(); bellAudio.currentTime = 0; clearInterval(countdownTimer);
+// 戸締め放送再生
+async function playClosing() {
     if(closingCheckbox.checked && closingAudio.src) {
         statusDiv.textContent = 'ステータス: 戸締め放送再生中';
         await closingAudio.play();
         startCountdown(closingAudio, '戸締め放送');
-        closingAudio.onended = () => { statusDiv.textContent = 'ステータス: 停止中'; countdownDiv.textContent=''; };
-    } else { statusDiv.textContent = 'ステータス: 停止中'; countdownDiv.textContent=''; }
+        closingAudio.onended = () => {
+            statusDiv.textContent = 'ステータス: 停止中';
+            countdownDiv.textContent='';
+        };
+    } else {
+        statusDiv.textContent = 'ステータス: 停止中';
+        countdownDiv.textContent='';
+    }
+}
+
+// 再生シーケンス
+async function playSequence() {
+    if(!bellAudio.src) { alert('発車ベルファイルを選択してください'); return; }
+    await playBell();
+    bellAudio.onended = playClosing;
+}
+
+// 停止（打ち返し対応）
+async function stopSequence() {
+    // 発車ベル停止
+    bellAudio.pause();
+    bellAudio.currentTime = 0;
+    clearInterval(countdownTimer);
+    // 戸締め放送だけ再生
+    await playClosing();
 }
 
 document.getElementById('playBtn').addEventListener('click', playSequence);
@@ -116,12 +128,13 @@ async function readSerialLoop() {
             const { value, done } = await reader.read();
             if(done) break;
             if(value && value.length > 0) {
-                if(value[0] === 0) playSequence(); // TTL LOW信号対応
+                if(value[0] === 0) { // TTL LOWでトリガー
+                    playSequence();
+                }
             }
         }
     } catch(e){ console.error(e); }
 }
-
 // ---------------------------
 // PWA Service Worker 登録
 if('serviceWorker' in navigator){
