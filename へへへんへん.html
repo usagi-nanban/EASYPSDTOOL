@@ -15,9 +15,9 @@ h1 { text-align: center; }
 #status { text-align: center; margin: 10px; font-size: 1.2em; font-weight: bold; color: #333; }
 #countdown { text-align: center; margin: 10px; font-size: 1.1em; color: #555; }
 .checkbox-label { display:block; text-align:center; margin:10px; font-size:1.1em; }
-.volume-control { width: 90%; margin: 10px auto; display: flex; align-items: center; }
-.volume-control label { flex: 1; }
-.volume-control input[type=range] { flex: 3; }
+.volume-control { width: 80%; margin: 10px auto; display: flex; align-items: center; }
+.volume-control label { flex: 1; text-align: right; margin-right: 10px; }
+.volume-control input { flex: 2; }
 </style>
 </head>
 <body>
@@ -26,18 +26,16 @@ h1 { text-align: center; }
 <label>発車ベル選択</label>
 <input type="file" id="bellFile" accept="audio/*" class="file-input">
 
-<!-- 追加: 発車ベル音量調整 -->
 <div class="volume-control">
-  <label for="bellVolume">発車ベル音量</label>
+  <label>発車ベル音量:</label>
   <input type="range" id="bellVolume" min="0" max="1" step="0.01" value="1">
 </div>
 
 <label>戸締め放送選択</label>
 <input type="file" id="closingFile" accept="audio/*" class="file-input">
 
-<!-- 追加: 戸締め放送音量調整 -->
 <div class="volume-control">
-  <label for="closingVolume">戸締め放送音量</label>
+  <label>戸締め放送音量:</label>
   <input type="range" id="closingVolume" min="0" max="1" step="0.01" value="1">
 </div>
 
@@ -57,20 +55,13 @@ let bellAudio = new Audio();
 let closingAudio = new Audio();
 let serialPort = null;
 let reader = null;
+let keepLooping = false; // 再生中フラグ
 const statusDiv = document.getElementById('status');
 const countdownDiv = document.getElementById('countdown');
 const closingCheckbox = document.getElementById('closingEnabled');
 let countdownTimer = null;
 
-// 音量スライダーのイベント設定
-document.getElementById('bellVolume').addEventListener('input', e => {
-    bellAudio.volume = parseFloat(e.target.value);
-});
-document.getElementById('closingVolume').addEventListener('input', e => {
-    closingAudio.volume = parseFloat(e.target.value);
-});
-
-// IndexedDB 用
+// IndexedDB
 let db;
 const dbRequest = indexedDB.open('bellDB', 1);
 dbRequest.onupgradeneeded = e => {
@@ -88,7 +79,6 @@ async function saveFileToDB(name, file) {
         tx.oncomplete = () => resolve();
     });
 }
-
 async function loadFileFromDB(name) {
     return new Promise(resolve => {
         const tx = db.transaction('files', 'readonly');
@@ -98,7 +88,7 @@ async function loadFileFromDB(name) {
     });
 }
 
-// ファイル選択イベント
+// ファイル選択
 document.getElementById('bellFile').addEventListener('change', async e => {
     const file = e.target.files[0];
     if(file) {
@@ -112,6 +102,14 @@ document.getElementById('closingFile').addEventListener('change', async e => {
         closingAudio.src = URL.createObjectURL(file);
         await saveFileToDB('closing', file);
     }
+});
+
+// 音量スライダー
+document.getElementById('bellVolume').addEventListener('input', e => {
+    bellAudio.volume = parseFloat(e.target.value);
+});
+document.getElementById('closingVolume').addEventListener('input', e => {
+    closingAudio.volume = parseFloat(e.target.value);
 });
 
 // オフライン用ロード
@@ -144,6 +142,14 @@ async function playBell() {
     statusDiv.textContent = 'ステータス: 発車ベル再生中';
     await bellAudio.play();
     startCountdown(bellAudio, '発車ベル');
+
+    bellAudio.onended = () => {
+        if(keepLooping && !closingCheckbox.checked) {
+            playBell(); // ループ再生
+        } else if(keepLooping) {
+            playClosing();
+        }
+    };
 }
 
 // 戸締め放送再生
@@ -158,6 +164,7 @@ async function playClosing() {
         closingAudio.onended = () => {
             statusDiv.textContent = 'ステータス: 停止中';
             countdownDiv.textContent='';
+            if(keepLooping) playBell(); // 戸締め後に再ループ
         };
     } else {
         statusDiv.textContent = 'ステータス: 停止中';
@@ -165,24 +172,25 @@ async function playClosing() {
     }
 }
 
-// 再生
+// 再生開始
 async function playSequence() {
+    keepLooping = true;
     await playBell();
-    bellAudio.onended = playClosing;
 }
 
-// 停止（打ち返し）
+// 停止
 async function stopSequence() {
+    keepLooping = false;
     bellAudio.pause();
     bellAudio.currentTime = 0;
     clearInterval(countdownTimer);
     await playClosing();
 }
 
+// 手動ボタン
 document.getElementById('playBtn').addEventListener('click', playSequence);
 document.getElementById('stopBtn').addEventListener('click', stopSequence);
 
-// ---------------------------
 // シリアル接続
 document.getElementById('serialBtn').addEventListener('click', async () => {
     try {
@@ -200,46 +208,33 @@ async function readSerialLoop() {
             const { value, done } = await reader.read();
             if(done) break;
             if(value && value.length > 0) {
-                if(value[0] === 0) { // TTL LOWで発車ベル→戸締め
+                if(value[0] === 0) { // ONボタン
                     playSequence();
+                } else if(value[0] === 1) { // OFFボタン
+                    stopSequence();
                 }
             }
         }
     } catch(e){ console.error(e); }
 }
 
-// ---------------------------
 // PWA Service Worker
 if ('serviceWorker' in navigator) {
     const swBlob = new Blob([`
         const cacheName = 'bell-app-v4';
         const filesToCache = ['./','./index.html'];
-
-        self.addEventListener('install', event => {
-            event.waitUntil(
-                caches.open(cacheName).then(cache => cache.addAll(filesToCache))
+        self.addEventListener('install', e => {
+            e.waitUntil(caches.open(cacheName).then(c => c.addAll(filesToCache)));
+        });
+        self.addEventListener('fetch', e => {
+            e.respondWith(
+                caches.match(e.request).then(r => r || fetch(e.request))
+                .catch(() => e.request.mode === 'navigate' ? caches.match('./index.html') : null)
             );
         });
-
-        self.addEventListener('fetch', event => {
-            event.respondWith(
-                caches.match(event.request).then(response => {
-                    return response || fetch(event.request);
-                }).catch(() => {
-                    if (event.request.mode === 'navigate') {
-                        return caches.match('./index.html');
-                    }
-                })
-            );
-        });
-
-        self.addEventListener('activate', event => {
-            event.waitUntil(
-                caches.keys().then(keys =>
-                    Promise.all(keys.map(key => {
-                        if (key !== cacheName) return caches.delete(key);
-                    }))
-                )
+        self.addEventListener('activate', e => {
+            e.waitUntil(
+                caches.keys().then(keys => Promise.all(keys.map(k => { if(k !== cacheName) return caches.delete(k); })))
             );
         });
     `], { type: 'application/javascript' });
@@ -258,8 +253,7 @@ window.addEventListener('beforeinstallprompt', (e) => {
     installBtn.className = 'button serial';
     installBtn.onclick = async () => {
         deferredPrompt.prompt();
-        const choiceResult = await deferredPrompt.userChoice;
-        console.log(choiceResult.outcome);
+        await deferredPrompt.userChoice;
         deferredPrompt = null;
     };
     document.body.appendChild(installBtn);
