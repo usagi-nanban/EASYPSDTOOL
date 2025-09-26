@@ -3,28 +3,199 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>どこでも発車ベル</title>
-<link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#ffffff">
+<title>発車ベル & 戸締め放送プレイヤー (テンキー改造対応)</title>
+<style>
+body { font-family: sans-serif; padding: 20px; background: #f5f5f5; }
+h1 { text-align: center; }
+.button { display: block; width: 90%; margin: 10px auto; padding: 15px; font-size: 1.2em; border: none; border-radius: 8px; cursor: pointer; }
+.file-input { display: block; margin: 10px auto; }
+.play { background-color: #4CAF50; color: white; }
+.stop { background-color: #f44336; color: white; }
+#status { text-align: center; margin: 10px; font-size: 1.2em; font-weight: bold; color: #333; }
+#countdown { text-align: center; margin: 10px; font-size: 1.1em; color: #555; }
+.volume-control { width: 80%; margin: 0 auto; display: flex; align-items: center; justify-content: center; gap: 10px; }
+</style>
 </head>
 <body>
-<h1>どこでも発車ベル</h1>
-<input type="file" id="fileInput" accept="audio/*">
-<p id="fileName">ファイル未選択</p>
-<button id="playBtn">再生</button>
-<button id="stopBtn">停止</button>
-<br><br>
-<label>ループ再生 <input type="checkbox" id="loopToggle"></label>
-<br>
-<label>音量 <input type="range" id="volume" min="0" max="1" step="0.01" value="1"></label>
-<p id="log"></p>
+<h1>発車ベル & 戸締め放送プレイヤー (テンキー改造対応)</h1>
 
-<script src="main.js"></script>
+<label>発車ベル選択</label>
+<input type="file" id="bellFile" accept="audio/*" class="file-input">
+<div class="volume-control">
+  <label>音量:</label>
+  <input type="range" id="bellVolume" min="0" max="1" step="0.01" value="1">
+</div>
+
+<label>戸締め放送選択</label>
+<input type="file" id="closingFile" accept="audio/*" class="file-input">
+<div class="volume-control">
+  <label>音量:</label>
+  <input type="range" id="closingVolume" min="0" max="1" step="0.01" value="1">
+</div>
+
+<button id="playBtn" class="button play">手動再生</button>
+<button id="stopBtn" class="button stop">手動停止</button>
+
+<div id="status">ステータス: 停止中</div>
+<div id="countdown"></div>
+
 <script>
+let bellAudio = new Audio();
+let closingAudio = new Audio();
+let isPlayingBell = false;
+let keyDownActive = false;
+let countdownTimer = null;
+const statusDiv = document.getElementById('status');
+const countdownDiv = document.getElementById('countdown');
+
+// IndexedDB
+let db;
+const dbRequest = indexedDB.open('bellDB', 1);
+dbRequest.onupgradeneeded = e => {
+    db = e.target.result;
+    db.createObjectStore('files', { keyPath: 'name' });
+};
+dbRequest.onsuccess = e => { db = e.target.result; };
+
+// 保存
+async function saveFileToDB(name, file) {
+    return new Promise(resolve => {
+        const tx = db.transaction('files', 'readwrite');
+        tx.objectStore('files').put({name, file});
+        tx.oncomplete = () => resolve();
+    });
+}
+// 読み込み
+async function loadFileFromDB(name) {
+    return new Promise(resolve => {
+        const tx = db.transaction('files', 'readonly');
+        const req = tx.objectStore('files').get(name);
+        req.onsuccess = () => resolve(req.result ? req.result.file : null);
+    });
+}
+
+// ファイル選択
+document.getElementById('bellFile').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if(file) {
+        bellAudio.src = URL.createObjectURL(file);
+        await saveFileToDB('bell', file);
+    }
+});
+document.getElementById('closingFile').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if(file) {
+        closingAudio.src = URL.createObjectURL(file);
+        await saveFileToDB('closing', file);
+    }
+});
+
+// 音量
+document.getElementById('bellVolume').addEventListener('input', e => {
+    bellAudio.volume = e.target.value;
+});
+document.getElementById('closingVolume').addEventListener('input', e => {
+    closingAudio.volume = e.target.value;
+});
+
+// オフラインロード
+async function loadAudioFiles() {
+    if(!bellAudio.src) {
+        const bellFile = await loadFileFromDB('bell');
+        if(bellFile) bellAudio.src = URL.createObjectURL(bellFile);
+    }
+    if(!closingAudio.src) {
+        const closingFile = await loadFileFromDB('closing');
+        if(closingFile) closingAudio.src = URL.createObjectURL(closingFile);
+    }
+}
+
+// カウントダウン
+function startCountdown(audio, label) {
+    clearInterval(countdownTimer);
+    countdownTimer = setInterval(() => {
+        let remaining = Math.max(0, Math.ceil(audio.duration - audio.currentTime));
+        countdownDiv.textContent = `${label} 残り: ${remaining}s`;
+        if(audio.paused) clearInterval(countdownTimer);
+    }, 200);
+}
+
+// 再生
+async function playBell() {
+    await loadAudioFiles();
+    if(!bellAudio.src) return;
+    closingAudio.pause();
+    closingAudio.currentTime = 0;
+    bellAudio.currentTime = 0;
+    bellAudio.loop = true;
+    statusDiv.textContent = 'ステータス: 発車ベル再生中';
+    await bellAudio.play();
+    startCountdown(bellAudio, '発車ベル');
+    isPlayingBell = true;
+}
+async function playClosing() {
+    await loadAudioFiles();
+    if(closingAudio.src) {
+        closingAudio.currentTime = 0;
+        statusDiv.textContent = 'ステータス: 戸締め放送再生中';
+        await closingAudio.play();
+        startCountdown(closingAudio, '戸締め放送');
+        closingAudio.onended = () => {
+            statusDiv.textContent = 'ステータス: 停止中';
+            countdownDiv.textContent='';
+        };
+    }
+}
+async function stopSequence() {
+    if (isPlayingBell) {
+        bellAudio.pause();
+        bellAudio.currentTime = 0;
+        isPlayingBell = false;
+        await playClosing();
+    }
+}
+
+// 手動
+document.getElementById('playBtn').addEventListener('click', playBell);
+document.getElementById('stopBtn').addEventListener('click', stopSequence);
+
+// キーボード (テンキー改造入力)
+document.addEventListener("keydown", (e) => {
+    if (e.key === "0" && !keyDownActive) {
+        keyDownActive = true;
+        playBell();
+    }
+});
+document.addEventListener("keyup", (e) => {
+    if (e.key === "0" && keyDownActive) {
+        keyDownActive = false;
+        stopSequence();
+    }
+});
+
+// PWA Service Worker
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('service-worker.js').then(() => {
-    console.log('Service Worker registered');
-  });
+    const swBlob = new Blob([`
+        const cacheName = 'bell-app-v6';
+        const filesToCache = ['./','./index.html'];
+        self.addEventListener('install', e => {
+            e.waitUntil(caches.open(cacheName).then(c => c.addAll(filesToCache)));
+        });
+        self.addEventListener('fetch', e => {
+            e.respondWith(
+                caches.match(e.request).then(r => r || fetch(e.request))
+                .catch(() => e.request.mode==='navigate' ? caches.match('./index.html') : undefined)
+            );
+        });
+        self.addEventListener('activate', e => {
+            e.waitUntil(
+                caches.keys().then(keys => Promise.all(keys.map(k => {
+                    if(k !== cacheName) return caches.delete(k);
+                })))
+            );
+        });
+    `], { type: 'application/javascript' });
+    navigator.serviceWorker.register(URL.createObjectURL(swBlob)).catch(console.error);
 }
 </script>
 </body>
